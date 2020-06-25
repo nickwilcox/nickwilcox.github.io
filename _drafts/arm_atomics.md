@@ -13,26 +13,28 @@ tags:
 
 One of the areas where ARM cpu's differ from X86 is their memory model. This article will take a look at what a memory model is and how it can cause code to be correct on one CPU but cause race conditions on another.
 
+We're going to build up a simple multi-threaded application that avoids the overhead of using any synchronization primitives from the standard library
+
 ## Basic Atomic Operations
 On modern CPU's aligned loads and store up to the native word size are atomic. This means that on a 64bit CPU like Apple's new ARM processors or a desktop X86 processor, when one core stores a `u8`, `u16`, `u32`, `u64` or `*T`, other cores will only ever read the whole value. 
 
 ```rust
 unsafe fn thread_1(shared_ptr: *mut u32) {
-    std::ptr::write_volatile(shared_ptr, 0xFFFF_FFFF);
+    *shared_ptr = 0xFFFF_FFFF;
 }
 
 unsafe fn thread_2(shared_ptr: *const u32) {
-    let shared_value = std::ptr::read_volatile(shared_ptr);
+    let shared_value = *shared_ptr;
     println!("shared value {}", shared_value);
 }
 ```
 
 If the value in `shared_ptr` is initialized as `0`, then when `thread_2` runs it is guaranteed to only ever read `0` or `0xFFFF_FFFF`. It will never see a half written value like `0xFFFF_0000`.
 
-*TODO* explain volatiles or get rid of them
-
 ## ??
-The pattern we'll be exploring builds upon the concept of storing a pointer being atomic across threads. One thread is going to perform some work using a mutable object it owns. Once it's finished that work it's going to publish that work as an immutable shared reference, using a pointer write.
+The program we'll be exploring builds upon the concept of storing a pointer being atomic across threads. One thread is going to perform some work using a mutable object it owns. Once it's finished that work it's going to publish that work as an immutable shared reference, using a pointer write.
+
+This 
 
 ## Initial Implementation
 
@@ -60,11 +62,7 @@ impl SynchronisedSum {
         }
         std::mem::forget(data);
     }
-}
-```
 
-```rust
-impl SynchronisedSum {
     pub fn calculate(&self, expected_sum: u32) {
         loop {
             let shared_ptr = self.shared.get();
@@ -211,7 +209,6 @@ impl SynchronisedSumFixed {
         }
     }
 
-    #[inline(never)]
     fn generate(&self) {
         let mut data: Box<[u32]> = (0..self.samples as u32).collect();
 
@@ -221,7 +218,6 @@ impl SynchronisedSumFixed {
         std::mem::forget(data);
     }
 
-    #[inline(never)]
     fn calculate(&self, expected_sum: u32) {
         loop {
             let data_ptr = unsafe { self.shared.load(Ordering::Acquire) };
@@ -240,7 +236,7 @@ impl SynchronisedSumFixed {
 }
 ```
 
-If we run the update version using `AtomicPtr<u32>` on our ARM cpu we get
+If we run the updated version using `AtomicPtr<u32>` on our ARM cpu we get
 ```
 running on aarch64
 all iterations passed
