@@ -1,5 +1,5 @@
 ---
-title: Untitled
+title: ARM vs X86 Memory Models
 categories:
   - blog
 tags:
@@ -9,34 +9,124 @@ tags:
   - Rust
 ---
 
-# ARM and X86
+With Apple's recent announcement that they are moving away from Intel X86 CPU's to their own ARM CPU's for future laptops and desktops I thought it would be a good time to take a look at the some differences that can affect systems programmers working in Rust. 
 
-One of the areas where ARM cpu's differ from X86 is their memory model. This article will take a look at what a memory model is and how it can cause code to be correct on one CPU but cause race conditions on another.
+One of the key areas where ARM CPU's differ from X86 is their memory model. This article will take a look at what a memory model is and how it can cause code to be correct on one CPU but cause race conditions on another.
 
-We're going to build up a simple multi-threaded application that avoids the overhead of using any synchronization primitives from the standard library
+## Memory Models
 
-## Basic Atomic Operations
-On modern CPU's aligned loads and store up to the native word size are atomic. This means that on a 64bit CPU like Apple's new ARM processors or a desktop X86 processor, when one core stores a `u8`, `u16`, `u32`, `u64` or `*T`, other cores will only ever read the whole value. 
+The way loads and stores to memory interact between multiple threads on a specific CPU is called that architectures Memory Model.
+
+Depending on the memory model of the CPU, multiple writes by one thread may become visible to another thread in a different order to the one they were issued in. 
+
+The same is true of a thread issuing multiple reads. A thread issuing multiple reads may receive "snapshots" of global state that represent points in time ordered differently to the order of issue.
+
+If you've never written multi-threaded code, or only done so using higher level synchronization primitives such as `std::sync::Mutex`, you've probably never been exposed to the details of the memory model. This is because the CPU, despite whatever re-ordering the memory model allows it to perform, always presents a consistent view of memory to the current thread.
+
+If we look at the below snippet of code that writes to memory and then reads the same memory straight back, we will always get the expected value of `58` back when we read. There is never the case that we could read some stale value from memory.
 
 ```rust
-unsafe fn thread_1(shared_ptr: *mut u32) {
-    *shared_ptr = 0xFFFF_FFFF;
+pub unsafe fn read_after_write(u32_ptr: *mut u32) {
+    u32_ptr.write_volatile(58);
+    let u32_value = u32_ptr.read_volatile();
+    println!("the value is {}", u32_value);
+}
+```
+*I'm using volatile operations because if I used normal pointer operations the compiler is smart enough to skip the memory read and just prints the value `58`*.
+
+Once we introduce multiple threads, we're now exposed to the fact that the CPU may be re-ordering our memory operations.
+
+We can examine the snippet below in a multi-threaded context
+
+```rust
+pub unsafe fn writer(u32_ptr_1: *mut u32, u32_ptr_2: *mut u32) {
+    u32_ptr_1.write_volatile(58);
+    u32_ptr_2.write_volatile(42);
 }
 
-unsafe fn thread_2(shared_ptr: *const u32) {
-    let shared_value = *shared_ptr;
-    println!("shared value {}", shared_value);
+pub unsafe fn reader(u32_ptr_1: *mut u32, u32_ptr_2: *mut u32) -> (u32, u32) {
+    (u32_ptr_1.read_volatile(), u32_ptr_2.read_volatile())
 }
 ```
 
-If the value in `shared_ptr` is initialized as `0`, then when `thread_2` runs it is guaranteed to only ever read `0` or `0xFFFF_FFFF`. It will never see a half written value like `0xFFFF_0000`.
+If we initialize the contents of both pointers to `0`, and then run each function in a different thread, we can list the possible outcomes. We know that there is no synchronization, but based on our experience with single threaded code we think the possible return values are `(0, 0)`, `(58, 0)` or `(58, 42)`. But the possibility of hardware re-ordering of memory writes affecting multi-threads means that there is a fourth option `(0, 42)`.
 
-## ??
-The program we'll be exploring builds upon the concept of storing a pointer being atomic across threads. One thread is going to perform some work using a mutable object it owns. Once it's finished that work it's going to publish that work as an immutable shared reference, using a pointer write.
+*You might think there are more possibilities due to the lack of synchronization. But all memory models guarantee that aligned loads and store up to the native word size are atomic (u32 or a 32-bit CPU, u64 on a 64-bit CPU). If we changed one of our writes to `0xFFFF_FFFF`, the read will only ever see the old value or the new value. It will never see an incomplete written value like `0xFFFF_0000`.*
 
-This 
+If the details of the CPU's memory model are hidden away when using regular memory accesses in a single-threaded context, it seems like we would have no way to control it in multi-threaded programs where the details do affect program correctness.
 
-## Initial Implementation
+Luckily Rust provides as with the `std::sync::atomic` module containing types that gives us the control we need. We use these types to specify exactly the memory ordering requirements our code needs. 
+
+When working with the `atomic` module, we don't worry about the memory models of individual CPU architectures. Instead the operation of the `atomic` module obeys an abstract memory model that's CPU agnostic. Once we've specified our requirements on the loads and stores using this Rust memory model, the compiler does the job of mapping to the memory model of the target CPU.
+
+The requirements we specify on each operation take the form of what re-ordering we want to allow (or deny) on the operation.
+
+For example `Ordering::Relaxed` means the CPU is free to perform any re-ordering it wants. `Ordering::Release` means that a store can only complete after all proceeding stores have finished.
+
+Let's look at how those two memory writes are actually compiled, compared to a regular write.
+
+```rust
+use std::sync::atomic::*;
+
+pub unsafe fn test_write(shared_ptr: *mut u32) {
+    *shared_ptr = 58;
+}
+
+pub unsafe fn test_atomic_relaxed(shared_ptr: &AtomicU32) {
+    shared_ptr.store(58, Ordering::Relaxed);
+}
+
+pub unsafe fn test_atomic_release(shared_ptr: &AtomicU32) {
+    shared_ptr.store(58, Ordering::Release);
+}
+```
+
+If we look at the [X86 assembly](https://godbolt.org/z/N4kV-k) for the above code, we see all three functions produce identical code. 
+
+```nasm
+example::test_write:
+        mov     dword ptr [rdi], 58
+        ret
+
+example::test_atomic_relaxed:
+        mov     dword ptr [rdi], 58
+        ret
+
+example::test_atomic_release:
+        mov     dword ptr [rdi], 58
+        ret
+```
+They all use the **`MOV`** (**MOV**e) instruction to write the value to memory. 
+
+We can compare that to the [ARM assembly](https://godbolt.org/z/synAkF).
+
+```nasm
+example::test_write:
+        mov     w8, #58
+        str     w8, [x0]
+        ret
+
+example::test_atomic_relaxed:
+        mov     w8, #58
+        str     w8, [x0]
+        ret
+
+example::test_atomic_release:
+        mov     w8, #58
+        stlr    w8, [x0]
+        ret
+```
+
+In contrast we can see there is a difference in the release ordering function. The raw pointer and relaxed atomic store use **`STR`** (**ST**ore **R**egister) while the release ordering uses the instruction **`STLR`** (**ST**ore with re**L**ease **R**egister).
+
+We should be able to see the risk here. The mapping between the theoretical Rust memory model and the X86 memory model is "forgiving" to programmer error. It's possible for us to write code that is wrong with respect to the abstract memory model, but still have it produce the correct assembly code and work correctly on some CPU's.
+
+## Writing a Multi-Threaded Program using Atomics
+The program we'll be exploring builds upon the concept of storing a pointer being atomic across threads. One thread is going to perform some work using a mutable object it owns. Once it's finished that work it's going to publish that work as an immutable shared reference, using an atomic pointer write to both signal the work is complete and allow reading threads to use the data.
+
+## The X86 Only Implementation
+
+If we really want to test how forgiving the X86's memory model is, we can write multi-threaded code that skips any use of the `std::sync::atomic` module.
 
 ```rust
 pub struct SynchronisedSum {
@@ -111,12 +201,12 @@ pub fn main() {
 }
 ```
 
-If I run the test on an Intel laptop I get:
+If I run the test on an Intel CPU I get:
 ```
 running on x86_64
 all iterations passed
 ```
-If I run on an ARM server I get:
+If I run on an ARM CPU I get:
 ```
 running on aarch64
 thread '<unnamed>' panicked at 'assertion failed: `(left == right)`
@@ -128,13 +218,9 @@ thread 'main' panicked at 'iteration 35 failed: Any', src\main.rs:128:9
 The x86 processor was able to run the test successfully all 10,000 times, but the ARM processor failed on the 35th attempt.
 
 ## What Went Wrong
-The way loads and stores to memory interact between multiple threads on a specific CPU is called that architectures **Memory Model**.
-
-Depending on the memory model of the CPU, multiple writes by one thread may become visible to another thread in a different order to the one they were issued in. The same is true of a thread issuing multiple reads.
-
 Correct functioning of our pattern requires that all the "work" we're doing is in the correct state in memory, before we perform the final write to the shared pointer to publish it to other threads.
 
-Where the memory model of ARM differs from X86 is that ARM CPU's will re-order writes, whereas X86 will not.
+Where the memory model of ARM differs from X86 is that ARM CPU's will re-order writes, whereas X86 will not. So the calculate thread can see a non-null pointer and start reading values from the slice before they've been written.
 
 For most of the memory operations in our program we want to give the CPU the freedom to re-arrange operations to maximize performance. We only want to specify the minimal constraints necessary to ensure correctness.
 
@@ -142,57 +228,13 @@ In the case of our `generate` function we want the values in the slice to be wri
 
 The opposite is true on the `calculate`. We want the read of the shared pointer to happen before any reads of the array values.
 
-## The Portable Version
+## The Correct Version
 
-We know that at key points in our program we need precise control over the memory model, regardless of what CPU we are running on. We cannot rely on regular reads and writes of values, or even `read_volatile` and `write_volatile`.
+In order to ensure correctness of our code the write to the shared pointer must have release ordering, this means that all preceding writes have completed before this write will occur.
 
-Luckily Rust provides as with the `std::sync::atomic` module containing types that gives us the control we need. We use these types to specify exactly the memory ordering requirements our code needs. 
+And because of the read order requirements in `calculate` we use acquire ordering.
 
-The operation of the `atomic` module obeys an abstract memory model that's CPU agnostic. Once we've set our constraints on the loads and stores using the Rust memory model, the compiler does the job of mapping to the memory model of the target CPU.
-
-An example of atomics in action compared to a regular memory write:
-```rust
-use std::sync::atomic::*;
-
-pub unsafe fn test_write(shared_ptr: *mut u32) {
-    *shared_ptr = 58;
-}
-
-pub unsafe fn test_atomic_write(shared_ptr: &AtomicU32) {
-    shared_ptr.store(58, Ordering::Release);
-}
-```
-
-[ARM assembly](https://godbolt.org/z/TvvVU3)
-```nasm
-example::test_write:
-        mov     w8, #58
-        str     w8, [x0]
-        ret
-
-example::test_atomic_write:
-        mov     w8, #58
-        stlr    w8, [x0]
-        ret
-```
-
-[X86 assembly](https://godbolt.org/z/w8PBwn)
-```nasm
-example::test_write:
-        mov     dword ptr [rdi], 58
-        ret
-
-example::test_atomic_write:
-        mov     dword ptr [rdi], 58
-        ret
-```
-We can see that on x86 both functions produce identical code and on ARM the compiler uses different instructions. The compiler knew that to give our write release ordering under the x86 memory model it didn't need to do anything different. But on ARM it has to use a special store instruction that has release ordering - `stlr` (**st**ore with re**l**ease **r**egister).
-
-## Updated Version
-
-In order to ensure correctness of our code our write to the shared pointer must have release ordering, this means that all preceding writes have completed before this write will occur.
-
-Our initialization of the data doesn't change, we want to give the CPU the freedom to perform that however is most efficient.
+Our initialization of the data doesn't change, neither does our sum code, we want to give the CPU the freedom to perform that however is most efficient.
 
 ```rust
 struct SynchronisedSumFixed {
@@ -245,12 +287,9 @@ all iterations passed
 ## Ordering Matters
 Using `AtomicPtr<u32>` still requires care when working across multiple CPU's. If we replaced `Ordering::Release` with `Ordering::Relaxed` we'd be back to a version that worked correctly on x86 but failed on ARM.
 
-## The Real World
-
-This was a demonstration of code that works on x86 but fails on ARM due to reasons that might not be familiar to some programmers.
-
-In the real work it takes more than a loop of 10,000 iterations to ensure correctness of code using atomics.
-
-It's far better to design multi-threading code that avoids shared mutable state.
-
 ## Conclusion
+Hopefully we've learnt about a new aspect of systems programming that will become increasingly important as ARM chips become more common. Ensuring correctness of atomic code has never been easy but it gets harder when working across different architectures with varying memory models.
+
+## Sources
+
+All the source code for this article can be found [on github](https://github.com/nickwilcox/blog_memory_model)
