@@ -276,15 +276,14 @@ impl SynchronisedSumFixed {
         let mut data: Box<[u32]> = (0..self.samples as u32).collect();
 
         // publish (aka release) this data to other threads
-        unsafe {
-            self.shared.store(data.as_mut_ptr(), Ordering::Release);
-        }
+        self.shared.store(data.as_mut_ptr(), Ordering::Release);
+
         std::mem::forget(data);
     }
 
     fn calculate(&self, expected_sum: u32) {
         loop {
-            let data_ptr = unsafe { self.shared.load(Ordering::Acquire) };
+            let data_ptr = self.shared.load(Ordering::Acquire);
 
             // when the pointer is non null we have safely acquired a reference to the global data
             if !data_ptr.is_null() {
@@ -309,9 +308,7 @@ all iterations passed
 
 ## Choice of Ordering Matters
 
-Using the `atomic` module still requires care when working across multiple CPU's. As we saw from looking at the X86 vs ARM assembly outputs, if we replace `Ordering::Release` with `Ordering::Relaxed` on our `store` we'd be back to a version that worked correctly on x86 but failed on ARM.
-
-The use of `atomic` is unsafe because it's the responsibility of the programmer to ensure there is no undefined behavior by using too weak an ordering.
+Using the `atomic` module still requires care when working across multiple CPU's. As we saw from looking at the X86 vs ARM assembly outputs, if we replace `Ordering::Release` with `Ordering::Relaxed` on our `store` we'd be back to a version that worked correctly on x86 but failed on ARM. It's especially required working with `AtomicPtr` to avoid undefined behavior when eventually accessing the value pointed at.
 
 ## Further Reading
 
