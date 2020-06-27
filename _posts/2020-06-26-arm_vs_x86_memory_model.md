@@ -248,7 +248,7 @@ For most of the memory operations in our program we want to give the CPU the fre
 
 In the case of our `generate` function we want the values in the slice to be written to memory in whatever order gives us the most speed. But all writes must be complete before we write our value to the shared pointer.
 
-The opposite is true on the `calculate`. We have a requirement the values we read from the slice memory are from at least the same point in time as value of the shared pointer. Although those instructions won't be issued until the read of the shared pointer has completed, we need the mask sure that we're not getting values from a stale cache.
+The opposite is true on the `calculate`. We have a requirement the values we read from the slice memory are from at least the same point in time as value of the shared pointer. Although those instructions won't be issued until the read of the shared pointer has completed, we need the make sure that we're not getting values from a stale cache.
 
 ## The Correct Version
 
