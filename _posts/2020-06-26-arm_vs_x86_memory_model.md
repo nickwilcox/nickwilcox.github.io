@@ -62,9 +62,9 @@ Luckily Rust provides as with the `std::sync::atomic` module containing types th
 
 When working with the `atomic` module, we don't worry about the actual memory models of individual CPU architectures. Instead the operation of the `atomic` module works on an abstract memory model that's CPU agnostic. Once we've expressed our requirements on the loads and stores using this Rust memory model, the compiler does the job of mapping to the memory model of the target CPU.
 
-The requirements we specify on each operation takes the form of what reordering we want to allow (or deny) on the operation. For example `Ordering::Relaxed` means the CPU is free to perform any reordering it wants. `Ordering::Release` means that a store can only complete after all proceeding stores have finished.
+The requirements we specify on each operation takes the form of what reordering we want to allow (or deny) on the operation. The orderings form a hierarchy, with each level placing more restrictions the CPU. For example `Ordering::Relaxed` means the CPU is free to perform any reordering it wants. `Ordering::Release` means that a store can only complete after all proceeding stores have finished.
 
-Let's look at how those two memory writes are actually compiled, compared to a regular write.
+Let's look at how atomic memory writes are actually compiled, compared to a regular write.
 
 ```rust
 use std::sync::atomic::*;
@@ -80,9 +80,13 @@ pub unsafe fn test_atomic_relaxed(shared_ptr: &AtomicU32) {
 pub unsafe fn test_atomic_release(shared_ptr: &AtomicU32) {
     shared_ptr.store(58, Ordering::Release);
 }
+
+pub unsafe fn test_atomic_consistent(shared_ptr: &AtomicU32) {
+    shared_ptr.store(58, Ordering::SeqCst);
+}
 ```
 
-If we look at the [X86 assembly](https://godbolt.org/z/N4kV-k) for the above code, we see all three functions produce identical code. 
+If we look at the [X86 assembly](https://godbolt.org/z/uVQM8T) for the above code, we see the first three functions produce identical code. It's not until the stricter `SeqCst` ordering that we get a different instruction being produced.
 
 ```nasm
 example::test_write:
@@ -96,10 +100,15 @@ example::test_atomic_relaxed:
 example::test_atomic_release:
         mov     dword ptr [rdi], 58
         ret
+        
+example::test_atomic_consistent:
+        mov     eax, 58
+        xchg    dword ptr [rdi], eax
+        ret
 ```
-They all use the **`MOV`** (**MOV**e) instruction to write the value to memory. 
+The first two orderings use the **`MOV`** (**MOV**e) instruction to write the value to memory. Only the strictest ordering produces a different instruction, **`XCHG`** (atomic e**XCH**an**G**), to a raw pointer write.
 
-We can compare that to the [ARM assembly](https://godbolt.org/z/synAkF).
+We can compare that to the [ARM assembly](https://godbolt.org/z/wWQo8P).
 
 ```nasm
 example::test_write:
@@ -116,9 +125,14 @@ example::test_atomic_release:
         mov     w8, #58
         stlr    w8, [x0]
         ret
+        
+example::test_atomic_consistent:
+        mov     w8, #58
+        stlr    w8, [x0]
+        ret
 ```
 
-In contrast we can see there is a difference in the release ordering function. The raw pointer and relaxed atomic store use **`STR`** (**ST**ore **R**egister) while the release ordering uses the instruction **`STLR`** (**ST**ore with re**L**ease **R**egister). *The **`MOV`** instruction is this disassembly is moving the constant `58` into a register, it's not a memory operation.*
+In contrast we can see there is a difference once we hit the release ordering requirement. The raw pointer and relaxed atomic store use **`STR`** (**ST**ore **R**egister) while the release and sequential ordering uses the instruction **`STLR`** (**ST**ore with re**L**ease **R**egister). *The **`MOV`** instruction is this disassembly is moving the constant `58` into a register, it's not a memory operation.*
 
 We should be able to see the risk here. The mapping between the theoretical Rust memory model and the X86 memory model is more forgiving to programmer error. It's possible for us to write code that is wrong with respect to the abstract memory model, but still have it produce the correct assembly code and work correctly on some CPU's.
 
@@ -228,7 +242,7 @@ The x86 processor was able to run the test successfully all 10,000 times, but th
 
 Correct functioning of our pattern requires that all the "work" we're doing is in the correct state in memory, before we perform the final write to the shared pointer to publish it to other threads.
 
-Where the memory model of ARM differs from X86 is that ARM CPU's will re-order writes, whereas X86 will not. So the calculate thread can see a non-null pointer and start reading values from the slice before they've been written.
+Where the memory model of ARM differs from X86 is that ARM CPU's will re-order writes relative to other writes, whereas X86 will not. So the calculate thread can see a non-null pointer and start reading values from the slice before they've been written.
 
 For most of the memory operations in our program we want to give the CPU the freedom to re-arrange operations to maximize performance. We only want to specify the minimal constraints necessary to ensure correctness.
 
