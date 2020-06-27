@@ -142,7 +142,7 @@ The program we'll be exploring builds upon the concept of storing a pointer valu
 
 ## The X86 Only Implementation
 
-If we really want to test how forgiving the X86's memory model is, we can write multi-threaded code that skips any use of the `std::sync::atomic` module. I want to stress this is not something you should ever actually consider doing. This is an learning exercise only.
+If we really want to test how forgiving the X86's memory model is, we can write multi-threaded code that skips any use of the `std::sync::atomic` module. I want to stress this is not something you should ever actually consider doing. In fact this code is probably undefined behavior. This is an learning exercise only.
 
 ```rust
 pub struct SynchronisedSum {
@@ -310,6 +310,8 @@ all iterations passed
 ## Choice of Ordering Matters
 
 Using the `atomic` module still requires care when working across multiple CPU's. As we saw from looking at the X86 vs ARM assembly outputs, if we replace `Ordering::Release` with `Ordering::Relaxed` on our `store` we'd be back to a version that worked correctly on x86 but failed on ARM.
+
+The use of `atomic` is unsafe because it's the responsibility of the programmer to ensure there is no undefined behavior by using too weak an ordering.
 
 ## Further Reading
 
