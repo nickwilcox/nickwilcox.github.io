@@ -316,3 +316,7 @@ Hopefully we've learnt about a new aspect of systems programming that will becom
 ## Sources
 
 All the source code for this article can be found [on github](https://github.com/nickwilcox/blog_memory_model)
+
+### Discussion
+
+Link to the [discussion on Reddit](https://www.reddit.com/r/rust/comments/hgkgg2/examining_arm_vs_x86_memory_models_with_rust/)
