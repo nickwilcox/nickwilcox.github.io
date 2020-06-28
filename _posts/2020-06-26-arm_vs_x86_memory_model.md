@@ -35,7 +35,7 @@ pub unsafe fn read_after_write(u32_ptr: *mut u32) {
 }
 ```
 *I'm using volatile operations because if I used normal pointer operations the compiler is smart enough to skip the memory read and just prints the value `58`. 
-Volatile operations stop the compiler from reordering or skipping our memory operation. However they have no affect on hardware.*
+Volatile operations stop the compiler from reordering or skipping our memory operation. However they have no affect on hardware (or the compiler re-ordering relative to non-volatile memory operations).*
 
 Once we introduce multiple threads, we're now exposed to the fact that the CPU may be reordering our memory operations.
 
@@ -132,7 +132,7 @@ example::test_atomic_consistent:
         ret
 ```
 
-In contrast we can see there is a difference once we hit the release ordering requirement. The raw pointer and relaxed atomic store use **`STR`** (**ST**ore **R**egister) while the release and sequential ordering uses the instruction **`STLR`** (**ST**ore with re**L**ease **R**egister). *The **`MOV`** instruction is this disassembly is moving the constant `58` into a register, it's not a memory operation.*
+In contrast we can see there is a difference once we hit the release ordering requirement. The raw pointer and relaxed atomic store use **`STR`** (**ST**ore **R**egister) while the release and sequential ordering uses the instruction **`STLR`** (**ST**ore with re**L**ease **R**egister). *The **`MOV`** instruction in this disassembly is moving the constant `58` into a register, it's not a memory operation.*
 
 We should be able to see the risk here. The mapping between the theoretical Rust memory model and the X86 memory model is more forgiving to programmer error. It's possible for us to write code that is wrong with respect to the abstract memory model, but still have it produce the correct assembly code and work correctly on some CPU's.
 
@@ -142,7 +142,7 @@ The program we'll be exploring builds upon the concept of storing a pointer valu
 
 ## The X86 Only Implementation
 
-If we really want to test how forgiving the X86's memory model is, we can write multi-threaded code that skips any use of the `std::sync::atomic` module. I want to stress this is not something you should ever actually consider doing. In fact this code is probably undefined behavior. This is an learning exercise only.
+If we really want to test how forgiving the X86's memory model is, we can write multi-threaded code that skips any use of the `std::sync::atomic` module. I want to stress this is not something you should ever actually consider doing. In fact this code has undefined behavior due to not guarding against possible compiler instruction re-ordering (however in Rust 1.44.1 the compiler doesn't re-order so the code "works"). This is an learning exercise only.
 
 ```rust
 pub struct SynchronisedSum {
