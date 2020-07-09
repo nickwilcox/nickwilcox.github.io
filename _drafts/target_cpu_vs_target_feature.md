@@ -24,10 +24,11 @@ To expand the opportunities for SIMD optimization Intel added the `VPGATHER` gro
 An example of a workload that could benefit from faster gathering is converting an indexed image. Indexed images are when each pixel doesn't directly contain a colour but is an index into a color palette. If we wanted to convert from an indexed image to a normal image, we simple replace the index by the value looked up in the palette.
 
 ```rust
-pub fn indexed_to_rgba32(input: &[u8], palette: &[u32], output: &mut [u32]) {
-    let pallete = &palette[0..256];
+pub type RGBA32 = u32;
+pub fn indexed_to_rgba32(input: &[u8], palette: &[RGBA32], output: &mut [RGBA32]) {
+    let palette = &palette[0..256];
     for (y, index) in output.iter_mut().zip(input.iter()) {
-        *y = pallete[*index as usize];
+        *y = palette[*index as usize];
     }
 }
 ```
@@ -67,7 +68,9 @@ Micro-architecture's use manufacturer designated code names. In recent times Int
 
 Intel has moved away from marketing names such as i3, i5, i7 having any fixed relationship to micro-architecture. But broadly speaking an i7 will have a better micro-architecture than an i3 released at the same time.
 
-An excellent resource for understanding more about the difference in details between micro-architectures is Agner Fog's [Instruction Tables](https://www.agner.org/optimize/instruction_tables.pdf) document. This document gives the latency (number of CPU cycles it takes to complete an instruction) for every instruction across various Intel and AMD micro-architectures. We can use these numbers to estimate if using a specific instruction is worthwhile when we multiple ways of implementing our code.
+An excellent resource for understanding the performance differences between micro-architectures is Agner Fog's [Instruction Tables](https://www.agner.org/optimize/instruction_tables.pdf) document. This document gives the latency (number of CPU cycles it takes to complete an instruction) for every instruction across various Intel and AMD micro-architectures. We can use these numbers to estimate if using a specific instruction is worthwhile when we multiple ways of implementing our code.
+
+If you want to know *why* the micro-architectures have the behaviour they do, Agner also has his [Micro-Arhitecture Manual](https://www.agner.org/optimize/microarchitecture.pdf).
 
 The micro-architectures in the document that support AVX2 are Broadwell, Haswell, Sky Lake, and Coffee Lake from Intel and Excavator and Zen from AMD. The latency of `VPGATHERQD` (the exact instruction we need for this function) ranges from 14 on Excavator down to only 2 on Sky Lake. We can see that newer micro-architecture don't just add support for new instructions or increase the overall performance, they can greatly improve the relative performance of how individual instructions are executed.
 
@@ -92,7 +95,25 @@ The obvious answer seem to be the `target-cpu` flag. If we compile again with `t
 
 We can now see the compiler has generated radically different code. It's vectorized and unrolled the loop, so we can see multiple instances of `VPGATHERQD`. Each iteration of the assembler loop corresponds to 64 iterations of the original loop.
 
-In the previous articles we saw how `#[target_feature(enable = "...")]` and `is_x86_feature_detected!("...")` can be used in our code to compile multiple variants of our functions and switch at runtime. Unfortunately there is no equivalent for generating multiple variants of our functions to target different micro-architectures.
+## Benchmarking Results
+
+If we benchmark the two compiler generated versions of the function along with a hard written version of the same function using the `` instrinsic function we get the following results. 
+
+| CPU                            | `cpu-feature=+avx2` | `cpu-target=Skylake` | Intrinsics |
+|--------------------------------|---------------------|----------------------|------------|
+| Haswell (i5-4670K @ 3.4Ghz)    | 26 μs               | 44 μs                | ?? μs      |
+| Zen 1 (AMD EPYC 7571 @ 2.1GHz) | 39 μs               | 92 μs                | 72 μs      |
+| Skylake (i7-8650U @ 1.90GHz)   | 28 μs               | 20 μs                | 15 μs      |
+
+The compilers decision holds up. On all micro-architectures apart from Skylake it's slower to vectorize the loop and use the `VPGATHERQD` instruction.
+
+We also see the same result from the previous article where the compilers generated AVX2 is not as fast as manually writing it using intrinsic functions.
+
+## Targeting Multiple Micro-Architectures
+
+In the previous articles we saw how `#[target_feature(enable = "...")]` and `is_x86_feature_detected!("...")` can be used in our code to compile multiple variants of our functions and switch at runtime. 
+
+Unfortunately there is no equivalent for generating multiple variants of our functions to target different micro-architectures.
 
 ## The Effect on Explicit SIMD
 
