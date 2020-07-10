@@ -189,3 +189,7 @@ Unfortunately there is no convenient solution in Rust for multi-versioning funct
 
 ## Sources
 All the source code for the article can be found on [GitHub](https://github.com/nickwilcox/blog_target_cpu).
+
+### Discussion
+
+Link to the [discussion on Reddit](https://www.reddit.com/r/rust/comments/hozs31/target_feature_vs_target_cpu_for_rust/)
