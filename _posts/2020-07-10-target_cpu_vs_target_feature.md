@@ -12,7 +12,7 @@ In the [previous article]({% post_url 2020-05-29-autovec2 %}) on auto-vectorizat
 There is a related compiler flag `target-cpu` we didn't touch on, so it's worth taking a look at how it affects the generated code.
 
 #### TL;DR
-Setting the `target-cpu` flag on the compiler does more than simply enabling CPU features. It changes the compiler's instruction cost model which can cause it to generate drastically different code in some cases.
+Setting the `target-cpu` flag on the compiler does more than simply enabling new instruction set families. It changes the compiler's instruction cost model which can cause it to generate drastically different code in some cases.
 
 ## The Benchmark Function
 So far the loops we've looked at have all dealt with loading, processing and storing adjacent elements in our slices.
@@ -81,8 +81,6 @@ The micro-architectures listed in the instruction tables that support AVX2 are B
 
 Given that on some hardware using a SIMD gather instruction might be slower than the scalar code, the compiler has chosen not to vectorize this loop.
 
-So the `target-feature` option that seemed able give us fine grained control over the instructions generated is no longer enough.
-
 ## Specifying the Exact Micro-Architecture to Rust
 
 The obvious answer seem to be the `target-cpu` flag. If we compile again with `target-cpu=skylake` and change the compiler's cost model so that `VPGATHER` instructions are considered faster to execute we get:
@@ -123,9 +121,19 @@ In the previous articles we saw how `#[target_feature(enable = "...")]` and `is_
 
 Unfortunately there is no equivalent for generating multiple variants of our functions to target different micro-architectures.
 
+## Back to `target-feature` (briefly)
+
+So far when discussing `target-feature` we've been controlling major changes like enabling new instruction set families. However micro-architecture specific tuning can also be done with via `target-feature`.
+
+For the above example passing `-C target-feature=+fast-gather` would also generate auto-vectorized output using `VPGATHERQD`.
+
+This won't solve our multi-versioning problem though. These smaller tuning features aren't able to be passed to the `#[target_feature(enable = "...")]` attribute.
+
+Overall it's more ergonomic simply to pass the specific micro-architecture name rather than working out all the specific tuning options that apply.
+
 ## The Effect on Explicit SIMD
 
-The `target-cpu` option doesn't just affect compilation and auto-vectorization of scalar Rust. It can also affect explicit SIMD code written using intrinsics. This might be unexpected as the Rust documentation for x86-64 intrinsics links to Intel's documentation which will usually list the exact instruction to be generated.
+Micro-architecture tuning doesn't just affect compilation and auto-vectorization of scalar Rust. It can also affect explicit SIMD code written using intrinsics. This might be unexpected as the Rust documentation for x86-64 intrinsics links to Intel's documentation which will usually list the exact instruction to be generated.
 
 However when implementing the Intel SIMD intrinsics in Rustc, the compiler authors followed Intel's naming and semantics, but actually mapped them to high level operations in LLVM (LLVM is the Rust compiler's backend). This leaves LLVM free to remap to whatever instruction it thinks will give the optimal performance for the current compilation settings.
 
@@ -177,15 +185,16 @@ example::do_shuffle:
 ```
 [View Full Sample](https://godbolt.org/z/6Z-AcD)
 
-We get only our single target `VPSHUFB` instruction generated.
+We get only our single target `VPSHUFB` instruction generated. We could also have used `-C target-feature=+fast-variable-shuffle`.
 
 ## Conclusion
 
-Setting the `target-cpu` flag does more than simply enabling CPU features. It changes the compiler's instruction cost model which can cause it to generate drastically different code in some cases.
+Setting the `target-cpu` flag does more than simply enabling new instruction set families. It changes the compiler's instruction cost model which can cause it to generate drastically different code in some cases.
 
 This is most obvious around AVX2, which is recent enough that early implementations have different instructions costs than more recent micro-architectures.
 
 Unfortunately there is no convenient solution in Rust for multi-versioning functions to target different CPU micro-architectures within a single executable.
+
 
 ## Sources
 All the source code for the article can be found on [GitHub](https://github.com/nickwilcox/blog_target_cpu).
