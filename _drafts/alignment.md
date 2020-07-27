@@ -27,6 +27,43 @@ Each subsequent desktop or server micro-architecture design from Intel has impro
 
 https://community.intel.com/t5/Intel-ISA-Extensions/SSE-and-AVX-behavior-with-aligned-unaligned-instructions/td-p/1170000
 
+###
+
+There's an extra tangent to explore. SSE instructions can have either register or memory operands. So we could have a instruction sequence
+
+```nasm
+movaps      xmm0, xmmword ptr [rcx] ; move the 4 f32's at the address contained in rcx into register xmm0
+movaps      xmm1, xmmword ptr [rdx] ; move the 4 f32's at the address contained in rdx into register xmm1
+addps       xmm0, xmm1              ; add the values and store in xmm0
+```
+
+and an equivalent sequence where we skip the second `MOVAPS` and pass the address straight to the `ADDPS` instruction
+
+```nasm
+movaps      xmm0, xmmword ptr [rcx] ; move the 4 f32's at the address contained in rcx into register xmm0
+addps       xmm0, xmmword ptr [rdx] ; add the 4 f32's at the address contained in rdx and store in xmm0
+```
+
+Addresses passed as argument this way have to be aligned.
+
+When Intel release their next micro-architectures sandy-bridge it included VEX instruction encoding. This is a second form of all existing instructions that allowed them to accept unaligned memory arguments.
+
+```nasm
+vmovups      xmm0, xmmword ptr [rcx] ; move the 4 f32's at the address contained in rcx into register xmm0
+vmovups      xmm1, xmmword ptr [rdx] ; move the 4 f32's at the address contained in rdx into register xmm1
+vaddps       xmm0, xmm0, xmm1        ; add the values and store in xmm0
+```
+
+and
+
+```nasm
+vmovups      xmm0, xmmword ptr [rcx]        ; move the 4 f32's at the address contained in rcx into register xmm0
+vaddps       xmm0, xmm0, xmmword ptr [rdx]  ; add the 4 f32's at the address contained in rdx and store in xmm0
+```
+are equivalent sequences and have no restrictions on alignment. The prefix `v` on all instruction signifies the VEX encoding.
+
+In Rust anytime you enable AVX or higher using `target-feature` or `target-cpu` it will encode all vector instructions using VEX (technically if you enable AVX512 you get EVEX encoding but that's another tangent).
+
 ## Arm V8
 
 There is one load instruction for SIMD on Arm V8 `LDR` (**L**oa**D** **R**egister). Unfortunately the question of can this instruction handle unaligned address is complicated. Whether an exception is generated for unaligned address is controlled at runtime by the value in a special CPU register. The value in this register can't actually be read or written by user code, so unless running on bare metal it's not possible to affect this or branch on it.
