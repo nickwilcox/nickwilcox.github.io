@@ -2,4 +2,10 @@
 permalink: /about/
 title: "About"
 ---
-Coding for 20+ years. Currently Rust on mobile. Previously C++, C# in video games, audio, sports.
+## Currently
+Expert Core Engineer at Sledgehammer Games Melbourne.
+
+Shipped Call of Duty: Vanguard. Currently working on future Call of Duty titles.
+
+## Previously
+Coding for 20+ years. Rust, C++, C# in mobile, AAA console games, audio, sports science.
