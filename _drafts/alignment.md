@@ -11,6 +11,49 @@ tags:
 
 ## What is Alignment
 
+Every variable in Rust has an address. The type of the variable specifies that the address be a multiple of a given value.
+
+The rule for primitive types is that the alignment is equal to the size.
+
+```rust
+fn alignment_checker<T: Sized>(variable: &T) {
+    let address = variable as *const _ as usize;
+    let alignment = std::mem::align_of::<T>();
+    println!("minimum alignment of {} = {}", std::any::type_name::<T>(), alignment);
+    println!("address of variable = {:#x}", address);
+    println!("is variable correctly aligned: {}", address % alignment == 0);
+    println!("------------------------------------")
+}
+
+fn main() {
+    let a: i32 = 58;
+    alignment_checker(&a);
+    let b: i16 = 29;
+    alignment_checker(&b);
+    let c: f64 = 2.71828182845;
+    alignment_checker(&c);
+}
+```
+
+```
+minimum alignment of i32 = 4
+address of variable = 0x7fff8e9ef0c8
+is variable correctly aligned: true
+------------------------------------
+minimum alignment of i16 = 2
+address of variable = 0x7fff8e9ef0ce
+is variable correctly aligned: true
+------------------------------------
+minimum alignment of f64 = 8
+address of variable = 0x7fff8e9ef0d0
+is variable correctly aligned: true
+------------------------------------
+```
+
+https://play.rust-lang.org/?version=stable&mode=debug&edition=2018&gist=470a716cd022b9f2bfa9ffedf124f201
+
+In safe Rust code our test of correct alignment will never return false. When writing unsafe code it's undefined behavior to dereference a pointer that is not correctly aligned. 
+
 ## History on X86
 
 When SSE was introduced it had two ways of loading packed values from memory into a register, `MOVAPS` (**MOV**e **A**ligned **P**acked **S**ingle-Precision) and `MOVUPS` (**MOV**e **U**naligned **P**acked **S**ingle-Precision). Passing a unaligned address to the aligned instruction would result in an exception. It was necessary to expose this level of detail to software due to significant performance penalties of unaligned memory operations. It was the job of the programmer to choose between absolute best performance or making the code more flexible (*improve this sentence*).
@@ -19,7 +62,7 @@ The performance penalty was actually two parts. First the `MOVUPS` instruction i
 
 This was situation for long time. Long enough for *"Using strictly aligned access is always fastest"* to become a rule of thumb
 
-That changed when Intel introduced the Nehalem micro-architecture in 2009. `MOVAPS` and `MOVUPS` now took the same of cycles to issue. However the penalty for transferring unaligned data from memory remained. If you passed an aligned address the `MOVUPS` you could expect the same overall performance as if you used `MOVAPS`.
+That changed when Intel introduced the Nehalem micro-architecture in 2009. `MOVAPS` and `MOVUPS` now took the same number of cycles to issue. However the penalty for transferring unaligned data from memory remained. If you passed an aligned address the `MOVUPS` you could expect the same overall performance as if you used `MOVAPS`.
 
 Each subsequent desktop or server micro-architecture design from Intel has improved the performance of actual memory transfer. *Mention crossing cache and page boundaries?*
 
